@@ -1,0 +1,407 @@
+---
+title: "Tempo até a decisão liminar em Habeas Corpus no TJAL"
+subtitle: "HCs (classe 307) ajuizados na 2ª instância em fevereiro de 2026"
+lang: pt-BR
+date: today
+date-format: "DD/MM/YYYY"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    embed-resources: true
+    fig-width: 7.5
+    fig-height: 4.2
+    fig-dpi: 150
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(lubridate)
+  library(survival)
+  library(knitr)
+})
+
+hc <- readRDS("data/hc_tjal_tratado.rds")
+
+# Paleta (slots 1 e 2 da paleta categórica de referência) e tokens de texto
+cor_liminar    <- "#2a78d6"
+cor_julgamento <- "#eb6834"
+ink_2  <- "#52514e"
+muted  <- "#898781"
+grid_c <- "#e1e0d9"
+base_c <- "#c3c2b7"
+
+tema <- theme_minimal(base_size = 11) +
+  theme(
+    plot.background    = element_rect(fill = "#fcfcfb", colour = NA),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.y = element_line(colour = grid_c, linewidth = 0.3),
+    axis.line.x        = element_line(colour = base_c, linewidth = 0.4),
+    axis.text          = element_text(colour = muted),
+    axis.title         = element_text(colour = ink_2),
+    plot.title         = element_text(face = "bold"),
+    plot.subtitle      = element_text(colour = ink_2),
+    plot.caption       = element_text(colour = muted, hjust = 0),
+    legend.position    = "top",
+    legend.justification = "left",
+    legend.title       = element_blank()
+  )
+theme_set(tema)
+
+num <- function(x, d = 1) format(round(x, d), nsmall = d, decimal.mark = ",",
+                                  big.mark = ".")
+pct <- function(x, d = 1) paste0(num(100 * x, d), "%")
+
+# Data de corte: último movimento registrado na base
+data_corte <- max(map_vec(hc$movimentos, \(m) max(m$dataHora)))
+
+# Desfecho para análise de riscos competitivos
+hc <- hc |>
+  mutate(
+    desfecho = case_when(
+      teve_liminar              ~ "liminar",
+      !is.na(data_julgamento)   ~ "julgamento sem liminar",
+      TRUE                      ~ "censurado"
+    ),
+    t_evento = case_when(
+      desfecho == "liminar" ~ tempo_dias,
+      desfecho == "julgamento sem liminar" ~
+        as.numeric(difftime(data_julgamento, data_ajuizamento, units = "days")),
+      TRUE ~ as.numeric(difftime(data_corte, data_ajuizamento, units = "days"))
+    )
+  )
+
+n_total   <- nrow(hc)
+com_lim   <- filter(hc, teve_liminar)
+n_lim     <- nrow(com_lim)
+n_julg    <- sum(hc$desfecho == "julgamento sem liminar")
+n_cens    <- sum(hc$desfecho == "censurado")
+t         <- com_lim$tempo_dias
+```
+
+# Resumo
+
+Dos **`r n_total`** Habeas Corpus ajuizados na 2ª instância do TJAL em
+fevereiro de 2026, **`r n_lim`** (`r pct(n_lim / n_total)`) tiveram uma decisão
+liminar registrada. Entre eles, a primeira decisão saiu em
+**`r num(median(t))` dias** (mediana), com metade dos casos entre
+`r num(quantile(t, .25))` e `r num(quantile(t, .75))` dias. Nenhum caso
+passou de `r num(max(t))` dias. A grande maioria das liminares foi
+**denegada** (`r sum(com_lim$resultado_liminar == "denegada")` de `r n_lim`).
+
+# Metodologia
+
+## Fonte e recorte
+
+- **Fonte:** API Pública do DataJud (CNJ), índice `api_publica_tjal`,
+  acessada pelo pacote R `jjesusfilho/datajud`.
+- **Recorte:** classe processual TPU **307 (Habeas Corpus)**, grau **G2**,
+  `dataAjuizamento` entre 01/02/2026 e 28/02/2026.
+- **Coleta** (`R/01_coleta.R`): `search_slice()`, que baixa cada fatia em uma
+  única requisição e confere se a resposta veio completa. A paginação comum
+  (`from`/`size`) repete e pula documentos nessa API. A coleta trouxe
+  `r n_total` processos, sem números duplicados.
+- **Data de corte** (último movimento registrado na base):
+  `r format(data_corte, "%d/%m/%Y")`.
+
+## Definição do tempo
+
+O tempo é medido do **ajuizamento** (`dataAjuizamento`) até o **primeiro
+movimento de decisão liminar**:
+
+```{r}
+#| label: tbl-codigos
+#| tbl-cap: "Códigos TPU tratados como decisão liminar"
+tribble(
+  ~Código, ~`Hierarquia TPU`, ~Resultado, ~Regra,
+  "339",   "Decisão › Concessão › Liminar", "Concedida", "Sempre",
+  "892",   "Decisão › Concessão em parte › Liminar", "Concedida em parte", "Sempre",
+  "792",   "Decisão › Não-Concessão › Liminar", "Denegada", "Sempre",
+  "12444", "Decisão › Deferimento", "Concedida", "Só antes do julgamento",
+  "15086", "Decisão › Deferimento em Parte", "Concedida em parte", "Só antes do julgamento",
+  "15223", "Decisão › Prejudicado o Pedido", "Prejudicada", "Só antes do julgamento"
+) |> kable()
+```
+
+- **Data de distribuição:** foi descartada como ponto de partida. O movimento
+  26 (Distribuição) falta em `r sum(is.na(hc$data_distribuicao))` processos, que
+  começam por redistribuição. Quando existe, ele ocorre poucos minutos após o
+  ajuizamento.
+- **Códigos genéricos:** em alguns HCs o TJAL lançou a liminar como
+  "deferimento" em vez do código específico. Esses códigos (12444, 15086,
+  15223) só contam se registrados antes do primeiro julgamento, para não
+  confundir a liminar com decisões posteriores.
+- **Fuso horário:** os movimentos trazem o sufixo `Z`, mas estão no mesmo
+  relógio do `dataAjuizamento`. A distribuição ocorre minutos depois do
+  ajuizamento e nenhum movimento é anterior a ele. Se o `Z` fosse UTC de fato,
+  haveria tempos negativos de cerca de 3 horas.
+
+## Validações
+
+```{r}
+#| label: validacoes
+mov <- bind_rows(hc$movimentos)
+validacoes <- tibble(
+  Verificação = c(
+    "Processos sem duplicata de numeroProcesso",
+    "Tempos negativos até a liminar",
+    "Movimentos anteriores ao ajuizamento",
+    "Processos com mais de uma decisão liminar",
+    "Movimentos sem código TPU",
+    "Código 1059 (recurso) lançado em HC — excluído"
+  ),
+  Resultado = c(
+    if (!anyDuplicated(hc$numeroProcesso)) "Sim" else "Não",
+    as.character(sum(hc$tempo_horas < 0, na.rm = TRUE)),
+    as.character(sum(map_int(seq_len(n_total), \(i)
+      sum(hc$movimentos[[i]]$dataHora < hc$data_ajuizamento[i])))),
+    "0 (apenas a primeira é usada)",
+    paste0(sum(is.na(mov$codigo)), " de ", nrow(mov), " (",
+           pct(mean(is.na(mov$codigo))), ")"),
+    paste0(sum(mov$codigo == 1059, na.rm = TRUE), " movimentos")
+  )
+)
+stopifnot(sum(hc$tempo_horas < 0, na.rm = TRUE) == 0)
+kable(validacoes)
+```
+
+Os movimentos sem código não têm nome nem complemento e não podem ser
+classificados. Se algum deles for uma decisão liminar, ela não aparece aqui, e
+o processo é contado como sem liminar.
+
+# Dados censurados: HCs sem decisão liminar
+
+Nem todo HC termina com uma decisão liminar registrada. Os
+`r n_total - n_lim` processos sem esse movimento se dividem em dois grupos
+com tratamento diferente:
+
+```{r}
+#| label: tbl-desfechos
+#| tbl-cap: "Desfecho de cada HC na data de corte"
+hc |>
+  count(desfecho) |>
+  mutate(
+    Tratamento = case_when(
+      desfecho == "liminar" ~ "Evento de interesse",
+      desfecho == "julgamento sem liminar" ~ "Risco competitivo",
+      TRUE ~ "Censura à direita (na data de corte)"
+    ),
+    `%` = pct(n / sum(n))
+  ) |>
+  rename(Desfecho = desfecho, N = n) |>
+  kable()
+```
+
+- **Julgamento sem liminar (`r n_julg` HCs):** o processo foi julgado ou
+  extinto sem nenhuma decisão liminar registrada. A explicação mais provável é
+  que não houvesse pedido liminar, ou que o pedido tenha sido apreciado junto
+  com o mérito. Depois do julgamento a liminar não pode mais acontecer, então
+  esse desfecho é um **risco competitivo**, e não uma censura comum. Tratá-lo
+  como censura (Kaplan-Meier) superestimaria a chance de haver liminar.
+- **Censurado (`r n_cens` HC):** sem liminar e sem julgamento até a data de
+  corte. O tempo observado é só um limite inferior, e o processo entra como
+  **censura à direita**.
+
+Por isso o relatório usa dois recortes:
+
+1. **Estatística descritiva condicional:** só os `r n_lim` HCs com liminar.
+   Responde: *quando há decisão liminar, quanto tempo ela leva?*
+2. **Incidência acumulada (estimador de Aalen-Johansen):** todos os
+   `r n_total` HCs. Responde: *qual a probabilidade de um HC ter decisão
+   liminar até o dia t?* O estimador leva em conta a censura e o risco
+   competitivo.
+
+# Estatísticas descritivas
+
+```{r}
+#| label: tbl-descritiva
+#| tbl-cap: "Tempo do ajuizamento à primeira decisão liminar (dias), HCs com liminar"
+resumo <- function(d) {
+  d |> summarise(
+    N = n(),
+    Mínimo = min(tempo_dias),
+    Q1 = quantile(tempo_dias, .25),
+    Mediana = median(tempo_dias),
+    Média = mean(tempo_dias),
+    Q3 = quantile(tempo_dias, .75),
+    IQR = IQR(tempo_dias),
+    Máximo = max(tempo_dias),
+    `Desvio-padrão` = sd(tempo_dias)
+  )
+}
+bind_rows(
+  com_lim |> mutate(Grupo = str_to_sentence(resultado_liminar)) |>
+    group_by(Grupo) |> resumo(),
+  com_lim |> resumo() |> mutate(Grupo = "Todos")
+) |>
+  mutate(across(where(is.double), \(x) num(x, 2))) |>
+  kable(align = "lrrrrrrrrr")
+```
+
+- **Média e mediana:** a média (`r num(mean(t), 2)` dias) fica acima da mediana
+  (`r num(median(t), 2)` dias), um sinal de assimetria à direita: alguns casos
+  demoram bem mais que o típico.
+- **IQR:** `r num(IQR(t), 2)` dias, ou seja, metade dos HCs com liminar teve a
+  decisão dentro de uma janela de pouco menos de 4 dias.
+- **Dias corridos:** contando dias de calendário, a mediana é de
+  `r median(com_lim$dias_corridos)` dias, e
+  `r pct(mean(com_lim$dias_corridos <= 7))` das liminares saíram em até 7 dias
+  corridos.
+- **Concedidas:** `r sum(str_detect(com_lim$resultado_liminar, "concedida"))`
+  liminares concedidas, integral ou parcialmente. É um número pequeno, então a
+  comparação entre os grupos é só descritiva.
+
+# Visualizações
+
+## Distribuição do tempo até a liminar
+
+```{r}
+#| label: fig-histograma
+#| fig-cap: "Distribuição do tempo até a primeira decisão liminar (HCs com liminar). A linha tracejada marca a mediana."
+ggplot(com_lim, aes(tempo_dias)) +
+  geom_histogram(binwidth = 1, boundary = 0, fill = cor_liminar,
+                 colour = "#fcfcfb", linewidth = 0.6) +
+  geom_vline(xintercept = median(t), linetype = "dashed", colour = ink_2,
+             linewidth = 0.5) +
+  annotate("label", x = median(t), y = Inf, vjust = 1.3, hjust = -0.05,
+           label = paste0("Mediana: ", num(median(t)), " dias"),
+           size = 3.4, colour = ink_2, fill = "#fcfcfb", linewidth = 0) +
+  scale_x_continuous(breaks = seq(0, 16, 2), expand = expansion(c(0, .02))) +
+  scale_y_continuous(expand = expansion(c(0, .1))) +
+  labs(x = "Dias desde o ajuizamento", y = "Número de HCs",
+       caption = paste0("N = ", n_lim, " HCs. Faixas de 1 dia."))
+```
+
+## Tempo por resultado da liminar
+
+```{r}
+#| label: fig-resultado
+#| fig-cap: "Tempo até a liminar por resultado. Cada ponto é um HC; a caixa marca o intervalo interquartil e a linha central, a mediana."
+#| fig-height: 3.2
+com_lim |>
+  mutate(grupo = if_else(resultado_liminar == "denegada", "Denegada",
+                         "Concedida\n(total ou parcial)")) |>
+  add_count(grupo) |>
+  mutate(grupo = paste0(grupo, "\nn = ", n),
+         grupo = fct_reorder(grupo, n)) |>
+  ggplot(aes(tempo_dias, grupo)) +
+  geom_boxplot(width = 0.5, outlier.shape = NA, colour = ink_2,
+               fill = NA, linewidth = 0.4) +
+  geom_point(position = position_jitter(height = 0.12, width = 0, seed = 1),
+             size = 2.4, alpha = 0.75, colour = cor_liminar) +
+  scale_x_continuous(breaks = seq(0, 16, 2), limits = c(0, 15.5)) +
+  labs(x = "Dias desde o ajuizamento", y = NULL) +
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.major.x = element_line(colour = grid_c, linewidth = 0.3))
+```
+
+## Incidência acumulada com risco competitivo
+
+```{r}
+#| label: aalen-johansen
+aj_dados <- hc |>
+  mutate(estado = factor(desfecho,
+                         levels = c("censurado", "liminar",
+                                    "julgamento sem liminar")))
+aj <- survfit(Surv(t_evento, estado) ~ 1, data = aj_dados)
+
+cif <- tibble(
+  tempo = c(0, aj$time),
+  liminar = c(0, aj$pstate[, which(aj$states == "liminar")]),
+  `julgamento sem liminar` = c(0, aj$pstate[, which(aj$states ==
+                                                      "julgamento sem liminar")])
+) |>
+  pivot_longer(-tempo, names_to = "desfecho", values_to = "prob") |>
+  mutate(desfecho = factor(desfecho,
+                           levels = c("liminar", "julgamento sem liminar")))
+
+cif_lim <- filter(cif, desfecho == "liminar")
+t50 <- min(cif_lim$tempo[cif_lim$prob >= 0.5])
+p7  <- max(cif_lim$prob[cif_lim$tempo <= 7])
+p14 <- max(cif_lim$prob[cif_lim$tempo <= 14])
+p_final <- max(cif_lim$prob)
+
+# Comparação: Kaplan-Meier ingênuo (julgamento tratado como censura)
+km <- survfit(Surv(t_evento, desfecho == "liminar") ~ 1, data = hc)
+km_7 <- 1 - summary(km, times = 7)$surv
+```
+
+Pelo estimador de Aalen-Johansen, a probabilidade de um HC ter decisão
+liminar é de **`r pct(p7)` em até 7 dias** e de **`r pct(p14)` em até 14
+dias**. A curva chega a `r pct(p_final)`, porque os demais HCs foram julgados
+sem liminar. Metade de todos os HCs já tinha decisão liminar no dia
+**`r num(t50)`** após o ajuizamento.
+
+Para comparar: um Kaplan-Meier que tratasse o julgamento como censura
+estimaria `r pct(km_7)` em 7 dias. É uma superestimação, porque supõe que os
+HCs julgados ainda poderiam receber liminar.
+
+```{r}
+#| label: fig-cif
+#| fig-cap: "Incidência acumulada (Aalen-Johansen) dos dois desfechos competitivos, todos os HCs."
+rot <- cif |>
+  group_by(desfecho) |>
+  filter(tempo <= 30) |>
+  slice_max(tempo, n = 1, with_ties = FALSE) |>
+  mutate(rotulo = paste0(str_to_sentence(desfecho), ": ", pct(prob, 0)))
+
+ggplot(cif |> filter(tempo <= 30),
+       aes(tempo, prob, colour = desfecho, linetype = desfecho)) +
+  geom_step(linewidth = 0.8) +
+  geom_text(data = rot, aes(label = rotulo), hjust = 1, vjust = -0.6,
+            size = 3.4, colour = ink_2, show.legend = FALSE) +
+  scale_colour_manual(values = c(liminar = cor_liminar,
+                                 `julgamento sem liminar` = cor_julgamento),
+                      labels = str_to_sentence) +
+  scale_linetype_manual(values = c(liminar = "solid",
+                                   `julgamento sem liminar` = "22"),
+                        labels = str_to_sentence) +
+  scale_y_continuous(labels = \(x) pct(x, 0), limits = c(0, 1),
+                     breaks = seq(0, 1, .25)) +
+  scale_x_continuous(breaks = seq(0, 30, 5), expand = expansion(c(0, .02))) +
+  labs(x = "Dias desde o ajuizamento",
+       y = "Probabilidade acumulada",
+       caption = paste0("N = ", n_total, " HCs. Eixo cortado em 30 dias; ",
+                        "o julgamento sem liminar continua subindo depois disso."))
+```
+
+# Limitações
+
+- **Ausência de pedido:** o DataJud não informa se houve pedido liminar. Os HCs
+  julgados sem liminar podem não ter tido pedido, e por isso a incidência
+  acumulada mede a chance de haver *decisão liminar registrada*, não a taxa de
+  apreciação dos pedidos.
+- **Movimentos sem código:** `r pct(mean(is.na(mov$codigo)))` dos movimentos
+  não têm código TPU. Liminares registradas assim ficam invisíveis.
+- **Codificação local:** o TJAL usa códigos genéricos em parte dos casos
+  (deferimento em vez de liminar concedida) e lança o código 1059, de recurso,
+  em HCs. A regra adotada para os genéricos depende da data do julgamento.
+- **Recorte de um mês:** com `r n_total` processos, e só
+  `r sum(str_detect(com_lim$resultado_liminar, "concedida"))` liminares
+  concedidas, as comparações entre subgrupos são descritivas.
+
+# Reprodutibilidade
+
+```{r}
+#| label: reprodutibilidade
+#| echo: false
+tibble(
+  Etapa = c("Setup e smoke test", "Coleta", "Tratamento", "Relatório"),
+  Arquivo = c("R/00_setup.R", "R/01_coleta.R", "R/02_analise.R",
+              "relatorio.qmd"),
+  Saída = c("—", "data/hc_tjal_fev2026.rds", "data/hc_tjal_tratado.rds",
+            "relatorio.html")
+) |> kable()
+```
+
+Ambiente: `r R.version.string`; pacotes `datajud`
+`r packageVersion("datajud")`, `tidyverse` `r packageVersion("tidyverse")`,
+`survival` `r packageVersion("survival")`.
