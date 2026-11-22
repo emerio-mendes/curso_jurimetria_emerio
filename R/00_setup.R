@@ -3,7 +3,7 @@
 
 options(repos = c(CRAN = "https://cloud.r-project.org"))
 
-pacotes_cran <- c("remotes", "tidyverse", "lubridate")
+pacotes_cran <- c("remotes", "tidyverse", "lubridate", "officer", "ragg")
 
 faltantes <- pacotes_cran[!vapply(pacotes_cran, requireNamespace,
                                   logical(1), quietly = TRUE)]

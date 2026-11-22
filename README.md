@@ -37,6 +37,7 @@ Rscript R/00_setup.R     # instala pacotes e testa a conexão com a API
 Rscript R/01_coleta.R    # coleta os HCs e salva data/hc_tjal_fev2026.rds
 Rscript R/02_analise.R   # calcula os tempos e salva data/hc_tjal_tratado.rds
 quarto render relatorio.qmd
+Rscript R/03_apresentacao.R   # gera apresentacao.pptx (10 slides)
 ```
 
 Os dados já coletados estão versionados em `data/`. Para só gerar o
@@ -59,11 +60,14 @@ R/
   00_setup.R         instalação de pacotes e teste da API
   01_coleta.R        coleta via API do DataJud
   02_analise.R       extração dos movimentos e cálculo dos tempos
+  03_apresentacao.R  geração da apresentação em PowerPoint
+  graficos.R         tema e gráficos usados no relatório e na apresentação
 data/
   hc_tjal_fev2026.rds   dados brutos da API
   hc_tjal_tratado.rds   uma linha por processo, com tempos e desfecho
 relatorio.qmd        relatório (fonte)
 relatorio.html       relatório renderizado
+apresentacao.pptx    apresentação (10 slides)
 ```
 
 ## Metodologia em resumo
